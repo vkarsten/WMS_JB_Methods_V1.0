@@ -25,16 +25,22 @@ public class TheWarehouseManager {
     private final String[] userOptions = {
             "1. List items by warehouse", "2. Search an item and place an order", "3. Browse by category", "4. Quit"
     };
-    // To refer the user provided name.
+    // To refer the user provided name
     private String userName;
+    // To refer the user provided password
     private String password;
+    // To check if the user has logged in during the session
     private boolean loggedIn = false;
 
-    // To refer to warehouses and categories
+    // To refer warehouses and categories
     private Set<Integer> warehouses = StockRepository.getWarehouses();
     private Set<String> categories = StockRepository.getCategories();
 
+    // To refer all actions during the session
     private static List<String> SESSION_ACTIONS = new ArrayList<>();
+
+    // To refer to the items matching the current search
+    private Map<Integer, List<Item>> matchingItemsPerWarehouse = new HashMap<>(this.warehouses.size());
 
     // =====================================================================================
     // Public Member Methods
@@ -90,45 +96,35 @@ public class TheWarehouseManager {
    public boolean confirm(String message) {
        System.out.printf("%s (y/n)\n", message);
        return (this.reader.nextLine().toLowerCase().startsWith("y"));
-    }
+   }
 
     /** End the application */
-    public void quit() {
+   public void quit() {
         System.out.printf("\nThank you for your visit, %s!\n", this.userName);
         listSessionActions();
         System.exit(0);
-    }
+   }
 
     // =====================================================================================
     // Private Methods
     // =====================================================================================
 
-    private void logSessionAction(String action) {
-        SESSION_ACTIONS.add(action);
-    }
-
-    private void listSessionActions() {
-        if (SESSION_ACTIONS.size() > 0) {
-            System.out.println("In this session you have: ");
-            int actionNumber = 1;
-            for (String action : SESSION_ACTIONS) {
-                System.out.printf("%d. %s \n", actionNumber, action);
-                actionNumber++;
-            }
-        } else System.out.println("In this session you have not done anything.");
-    }
+    // Methods for general execution flow
+    // =====================================================================================
 
     /** Get user's name via CLI */
-    private void seekUserName() {
+   private void seekUserName() {
         System.out.println("Please enter your user name:");
         this.userName = this.reader.nextLine();
-    }
+   }
 
+    /** Get user's password via CLI */
     private void askPassword() {
         System.out.println("Please enter your password:");
         this.password = this.reader.nextLine();
     }
 
+    /** log in the current user */
     private void logIn() {
         if (this.loggedIn) return;
         System.out.println("You need to log in for this action.");
@@ -144,55 +140,89 @@ public class TheWarehouseManager {
             }
     }
 
-
     /** Print a welcome message with the given user's name */
     private void greetUser() {
         System.out.printf("Hello %s!\n", this.userName);
     }
 
+    /** log an action into the list of session actions */
+    private void logSessionAction(String action) {
+        SESSION_ACTIONS.add(action);
+    }
+
+    /** list all actions of this session */
+    private void listSessionActions() {
+        if (SESSION_ACTIONS.size() > 0) {
+            System.out.println("In this session you have: ");
+            int actionNumber = 1;
+            for (String action : SESSION_ACTIONS) {
+                System.out.printf("%d. %s \n", actionNumber, action);
+                actionNumber++;
+            }
+        } else System.out.println("In this session you have not done anything.");
+    }
+
+
+    // Methods for menu option: list items by warehouse
+    // =====================================================================================
     private void listItemsByWarehouse() {
         Map<Integer, Integer> totalItems = new HashMap<>(this.warehouses.size());
 
         for (int warehouse : this.warehouses) {
-            System.out.println("\nItems in Warehouse " + warehouse);
-            List<Item> warehouseItems = new ArrayList<>(StockRepository.getItemsByWarehouse(warehouse));
+                System.out.println("\nItems in Warehouse " + warehouse);
+                List<Item> warehouseItems = new ArrayList<>(StockRepository.getItemsByWarehouse(warehouse));
 
-            listItems(warehouseItems);
+                listItems(warehouseItems);
 
-            totalItems.put(warehouse, warehouseItems.size());
+                totalItems.put(warehouse, warehouseItems.size());
         }
 
-        for (Map.Entry<Integer, Integer> entry : totalItems.entrySet()) {
-            System.out.printf("Total items in warehouse %d: %s\n", entry.getKey(), entry.getValue());
-        }
+        listTotalItemsPerWarehouse(totalItems);
 
         logSessionAction("Listed " + getTotalListedItems() + " items.");
     }
 
-    private int getTotalListedItems() {
-        return StockRepository.getAllItems().size();
-    }
-
+    /**
+     * prints the list of all items in a given warehouse
+     * @param warehouseItems, List of Items
+     */
     private void listItems(List<Item> warehouseItems) {
             for (Item item : warehouseItems) {
                 System.out.printf("- %s\n", item.toString());
             }
     }
 
+    /**
+     * prints the total amounts of items per warehouse
+     * @param totalItemsPerWarehouse, Map of Integer (Warehouse number) and Integer (Items in the Warehouse)
+     */
+    private void listTotalItemsPerWarehouse(Map<Integer, Integer> totalItemsPerWarehouse) {
+        for (Map.Entry<Integer, Integer> entry : totalItemsPerWarehouse.entrySet()) {
+            System.out.printf("Total items in warehouse %d: %s\n", entry.getKey(), entry.getValue());
+        }
+    }
+
+    /** return the total amount of items in all warehouses */
+    private int getTotalListedItems() {
+        return StockRepository.getAllItems().size();
+    }
+
+    // Methods for menu option: Search item and place order
+    // =====================================================================================
     private void searchItemAndPlaceOrder() {
         String itemName = askItemToOrder();
 
-        Map<Integer, List<Item>> allAmounts = this.getMatchingItemLists(itemName);
-        int totalAmount = this.getAvailableAmount(allAmounts);
+        this.getMatchingItemLists(itemName);
+        int totalAmount = this.getAvailableAmount();
 
         System.out.println("Amount available: " + totalAmount);
 
         if (totalAmount == 0) {
             this.printLocation("Not in stock");
         } else {
-            this.printLocation(allAmounts);
-            if (allAmounts.size() > 1) {
-                this.printMaximumAvailability(allAmounts);
+            this.listAllLocations();
+            if (this.matchingItemsPerWarehouse.size() > 1) {
+                this.printMaximumAvailability();
             }
 
             if (this.confirm("Would you like to order this item?")) {
@@ -216,14 +246,12 @@ public class TheWarehouseManager {
 
     /**
      * Calculate availability of the given item
-     *
-     * @param matchingItems List of matchingItems per Warehouse
      * @return integer total amount
      */
-    private int getAvailableAmount(Map<Integer, List<Item>> matchingItems) {
+    private int getAvailableAmount() {
         int totalAmount = 0;
 
-         for (List<Item> warehouseItems : matchingItems.values()) {
+         for (List<Item> warehouseItems : matchingItemsPerWarehouse.values()) {
              totalAmount += warehouseItems.size();
          }
 
@@ -235,16 +263,13 @@ public class TheWarehouseManager {
      * @param itemName, String, the name of the item
      * @return allAmounts, the matching items per warehouse
      */
-    private Map<Integer, List<Item>> getMatchingItemLists(String itemName) {
-        Map<Integer, List<Item>> allAmounts = new HashMap<>(this.warehouses.size());
-
+    private void getMatchingItemLists(String itemName) {
         for (int warehouse : this.warehouses) {
             List<Item> matchingItems = this.find(itemName, warehouse);
             if (matchingItems.size() > 0) {
-                allAmounts.put(warehouse, matchingItems);
+                this.matchingItemsPerWarehouse.put(warehouse, matchingItems);
             }
         }
-        return allAmounts;
     }
 
     /**
@@ -273,20 +298,22 @@ public class TheWarehouseManager {
         System.out.println("Location: " + location);
     }
 
-    /** Print the location of an item and lists the corresponding items and their warehouse
-     *
-     * @param matchingItems a map of the matching items in the different locations
-     */
-    private void printLocation(Map<Integer, List<Item>> matchingItems) {
+    /** Print the location of an item and lists the corresponding items and their warehouse */
+    private void listAllLocations() {
         System.out.println("Location: ");
 
-        for (List<Item> warehouseItems : matchingItems.values()) {
+        for (List<Item> warehouseItems : matchingItemsPerWarehouse.values()) {
             for (Item item : warehouseItems) {
                 System.out.printf("- Warehouse %d (in stock for %d days)\n", item.getWarehouse(), this.calculateNumberOfDaysInStock(item));
             }
         }
     }
 
+    /**
+     * Calculate the number of days a given item has been in stock
+     * @param item Item
+     * @return the number of days in stock, long
+     */
     private long calculateNumberOfDaysInStock(Item item) {
         Date today = new Date();
         return TimeUnit.DAYS.convert(today.getTime() - item.getDateOfStock().getTime(), TimeUnit.MILLISECONDS);
@@ -294,14 +321,12 @@ public class TheWarehouseManager {
 
     /**
      * Print the location with the maximum availability of an item
-     *
-     * @param matchingItems a map of the matching items in the different locations
      */
-    private void printMaximumAvailability(Map<Integer, List<Item>> matchingItems) {
+    private void printMaximumAvailability() {
         int maxSize = 0;
         int warehouse = 0;
 
-        for (Map.Entry<Integer, List<Item>> warehouseItems : matchingItems.entrySet()) {
+        for (Map.Entry<Integer, List<Item>> warehouseItems : matchingItemsPerWarehouse.entrySet()) {
             if (warehouseItems.getValue().size() > maxSize) {
                 maxSize = warehouseItems.getValue().size();
                 warehouse = warehouseItems.getKey();
@@ -348,11 +373,18 @@ public class TheWarehouseManager {
         return desiredAmount;
     }
 
-    private String getAppropriateIndefiniteArticle(String itemName) {
+    /**
+     * Return the appropriate indefinite article for a given String, depending on whether it starts with a vowel
+     * @param word String
+     * @return the appropriate article, String
+     */
+    private String getAppropriateIndefiniteArticle(String word) {
         String vowels = "aeiou";
-        return (vowels.indexOf(Character.toLowerCase(itemName.charAt(0))) != -1) ? "an" : "a";
+        return (vowels.indexOf(Character.toLowerCase(word.charAt(0))) != -1) ? "an" : "a";
     }
 
+    // Methods for menu option: browse by category
+    // =====================================================================================
     private void browseByCategory() {
         Map<Integer, String> categoryList = this.getCategoryMenu();
         this.showCategoryMenu(categoryList);
